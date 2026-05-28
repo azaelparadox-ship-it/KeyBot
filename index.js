@@ -1,29 +1,29 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
-
+ 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-
+ 
 // ──────────────────────────────────────────
-// Liste des donjons — à mettre à jour chaque saison
+// Donjons Mythic+ — Saison 1 de Midnight
 // ──────────────────────────────────────────
 const DUNGEONS = [
-  { label: 'The Rookery',                  value: 'rookery',             emoji: '🪶' },
-  { label: 'Priory of the Sacred Flame',   value: 'priory',              emoji: '🔥' },
-  { label: 'Darkflame Cleft',              value: 'darkflame',           emoji: '🌑' },
-  { label: 'Cinderbrew Meadery',           value: 'cinderbrew',          emoji: '🍺' },
-  { label: 'Operation: Floodgate',         value: 'floodgate',           emoji: '💧' },
-  { label: 'Theater of Pain',             value: 'theater',             emoji: '💀' },
-  { label: 'The MOTHERLODE!!',            value: 'motherlode',          emoji: '💰' },
-  { label: 'Mechagon: Workshop',          value: 'mechagon',            emoji: '⚙️' },
+  // Donjons Midnight
+  { label: 'Terrasse des Magistères',    value: 'magisters',    emoji: '🌙' },
+  { label: 'Flèche de Coursevent',       value: 'coursevent',   emoji: '💨' },
+  { label: 'Gouffre de la Sombrevoie',   value: 'sombrevoie',   emoji: '🌑' },
+  { label: 'Place Parhélion',            value: 'parhelion',    emoji: '☀️' },
+  // Donjons d'anciennes extensions
+  { label: 'Orée-du-Ciel',              value: 'oree',         emoji: '🪶' },
+  { label: 'Siège du Triumvirat',        value: 'triumvirat',   emoji: '⚔️' },
+  { label: "Académie d'Algeth'ar",       value: 'algethar',     emoji: '📚' },
+  { label: 'Fosse de Saron',             value: 'saron',        emoji: '❄️' },
 ];
-
+ 
 // Stockage temporaire des sessions en cours (en mémoire)
-// clé = userId, valeur = { dungeon, level, roles, messageId, channelId }
 const sessions = new Map();
 // Stockage des groupes publiés
-// clé = messageId, valeur = { dungeon, level, rolesNeeded: Set, members: { tank, heal, dps: [] } }
 const groups = new Map();
-
+ 
 // ──────────────────────────────────────────
 // Enregistrement de la commande slash /lfm
 // ──────────────────────────────────────────
@@ -38,7 +38,7 @@ async function registerCommands() {
   await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
   console.log('✅ Commande /lfm enregistrée');
 }
-
+ 
 // ──────────────────────────────────────────
 // Construction des composants UI
 // ──────────────────────────────────────────
@@ -50,7 +50,7 @@ function buildDungeonSelect() {
       .addOptions(DUNGEONS.map(d => ({ label: d.label, value: d.value, emoji: d.emoji })))
   );
 }
-
+ 
 function buildLevelSelect() {
   const levels = [2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,20];
   return new ActionRowBuilder().addComponents(
@@ -60,7 +60,7 @@ function buildLevelSelect() {
       .addOptions(levels.map(l => ({ label: `+${l}`, value: String(l) })))
   );
 }
-
+ 
 function buildRoleButtons(selectedRoles = new Set()) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -82,11 +82,12 @@ function buildRoleButtons(selectedRoles = new Set()) {
       .setDisabled(selectedRoles.size === 0)
   );
 }
-
+ 
 function buildGroupEmbed(dungeon, level, rolesNeeded, members) {
   const dungeonLabel = DUNGEONS.find(d => d.value === dungeon)?.label || dungeon;
+  const dungeonEmoji = DUNGEONS.find(d => d.value === dungeon)?.emoji || '🗝️';
   const roleLines = [];
-
+ 
   if (rolesNeeded.has('tank')) {
     const t = members.tank ? `<@${members.tank}>` : '*En attente...*';
     roleLines.push(`🛡️ **Tank** — ${t}`);
@@ -97,31 +98,31 @@ function buildGroupEmbed(dungeon, level, rolesNeeded, members) {
   }
   if (rolesNeeded.has('dps')) {
     const filled = members.dps.map(id => `<@${id}>`);
-    const needed = 3 - members.dps.length; // toujours 3 DPS max
+    const needed = 3 - members.dps.length;
     const waiting = needed > 0 ? Array(needed).fill('*En attente...*') : [];
     [...filled, ...waiting].forEach(d => roleLines.push(`⚔️ **DPS** — ${d}`));
   }
-
+ 
   const totalNeeded =
     (rolesNeeded.has('tank') ? 1 : 0) +
     (rolesNeeded.has('heal') ? 1 : 0) +
     (rolesNeeded.has('dps') ? 3 : 0);
-
+ 
   const totalFilled =
     (members.tank ? 1 : 0) +
     (members.heal ? 1 : 0) +
     members.dps.length;
-
+ 
   const isFull = totalFilled >= totalNeeded;
-
+ 
   return new EmbedBuilder()
-    .setTitle(`🗝️ ${dungeonLabel} — Clé +${level}`)
+    .setTitle(`${dungeonEmoji} ${dungeonLabel} — Clé +${level}`)
     .setDescription(roleLines.join('\n'))
     .setColor(isFull ? 0x57ab5a : 0x5865f2)
-    .setFooter({ text: isFull ? '✅ Groupe complet !' : `${totalFilled}/${totalNeeded} joueurs` })
+    .setFooter({ text: isFull ? '✅ Groupe complet !' : `${totalFilled}/${totalNeeded} joueurs • Saison 1 Midnight` })
     .setTimestamp();
 }
-
+ 
 function buildJoinButtons(rolesNeeded) {
   const row = new ActionRowBuilder();
   if (rolesNeeded.has('tank')) row.addComponents(new ButtonBuilder().setCustomId('join_tank').setLabel('🛡️ Je joue Tank').setStyle(ButtonStyle.Secondary));
@@ -130,19 +131,19 @@ function buildJoinButtons(rolesNeeded) {
   row.addComponents(new ButtonBuilder().setCustomId('leave_group').setLabel('Quitter').setStyle(ButtonStyle.Danger));
   return row;
 }
-
+ 
 // ──────────────────────────────────────────
 // Client Discord
 // ──────────────────────────────────────────
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-
+ 
 client.once('ready', () => {
   console.log(`🤖 KeyBot connecté en tant que ${client.user.tag}`);
 });
-
+ 
 client.on('interactionCreate', async interaction => {
   const userId = interaction.user.id;
-
+ 
   // ── /lfm : démarrer la création de groupe ──
   if (interaction.isChatInputCommand() && interaction.commandName === 'lfm') {
     sessions.set(userId, { dungeon: null, level: null, roles: new Set() });
@@ -153,33 +154,34 @@ client.on('interactionCreate', async interaction => {
     });
     return;
   }
-
+ 
   // ── Sélection du donjon ──
   if (interaction.isStringSelectMenu() && interaction.customId === 'select_dungeon') {
     const session = sessions.get(userId) || { dungeon: null, level: null, roles: new Set() };
     session.dungeon = interaction.values[0];
     sessions.set(userId, session);
+    const d = DUNGEONS.find(d => d.value === session.dungeon);
     await interaction.update({
-      content: `## 🗝️ Créer un groupe Mythic+\n✅ Donjon : **${DUNGEONS.find(d => d.value === session.dungeon)?.label}**\n**Étape 2/3** — Choisis le niveau de clé :`,
+      content: `## 🗝️ Créer un groupe Mythic+\n✅ Donjon : **${d?.emoji} ${d?.label}**\n**Étape 2/3** — Choisis le niveau de clé :`,
       components: [buildLevelSelect()]
     });
     return;
   }
-
+ 
   // ── Sélection du niveau ──
   if (interaction.isStringSelectMenu() && interaction.customId === 'select_level') {
     const session = sessions.get(userId);
     if (!session) return;
     session.level = interaction.values[0];
     sessions.set(userId, session);
-    const dungeonLabel = DUNGEONS.find(d => d.value === session.dungeon)?.label;
+    const d = DUNGEONS.find(d => d.value === session.dungeon);
     await interaction.update({
-      content: `## 🗝️ Créer un groupe Mythic+\n✅ Donjon : **${dungeonLabel}** — Clé **+${session.level}**\n**Étape 3/3** — Quels rôles tu cherches ? (tu peux en choisir plusieurs)`,
+      content: `## 🗝️ Créer un groupe Mythic+\n✅ Donjon : **${d?.emoji} ${d?.label}** — Clé **+${session.level}**\n**Étape 3/3** — Quels rôles tu cherches ? (tu peux en choisir plusieurs)`,
       components: [buildRoleButtons(session.roles)]
     });
     return;
   }
-
+ 
   // ── Toggle rôles ──
   if (interaction.isButton() && ['toggle_tank','toggle_heal','toggle_dps'].includes(interaction.customId)) {
     const session = sessions.get(userId);
@@ -188,31 +190,31 @@ client.on('interactionCreate', async interaction => {
     if (session.roles.has(role)) session.roles.delete(role);
     else session.roles.add(role);
     sessions.set(userId, session);
-    const dungeonLabel = DUNGEONS.find(d => d.value === session.dungeon)?.label;
+    const d = DUNGEONS.find(d => d.value === session.dungeon);
     await interaction.update({
-      content: `## 🗝️ Créer un groupe Mythic+\n✅ Donjon : **${dungeonLabel}** — Clé **+${session.level}**\n**Étape 3/3** — Quels rôles tu cherches ? (tu peux en choisir plusieurs)`,
+      content: `## 🗝️ Créer un groupe Mythic+\n✅ Donjon : **${d?.emoji} ${d?.label}** — Clé **+${session.level}**\n**Étape 3/3** — Quels rôles tu cherches ? (tu peux en choisir plusieurs)`,
       components: [buildRoleButtons(session.roles)]
     });
     return;
   }
-
+ 
   // ── Publication du groupe ──
   if (interaction.isButton() && interaction.customId === 'publish_group') {
     const session = sessions.get(userId);
     if (!session || session.roles.size === 0) return;
-
+ 
     const members = { tank: null, heal: null, dps: [] };
     const embed = buildGroupEmbed(session.dungeon, session.level, session.roles, members);
     const joinRow = buildJoinButtons(session.roles);
-
+ 
     const msg = await interaction.channel.send({ embeds: [embed], components: [joinRow] });
     groups.set(msg.id, { dungeon: session.dungeon, level: session.level, rolesNeeded: new Set(session.roles), members, hostId: userId });
     sessions.delete(userId);
-
+ 
     await interaction.update({ content: '✅ **Groupe publié !**', components: [] });
     return;
   }
-
+ 
   // ── Rejoindre en tant que Tank ──
   if (interaction.isButton() && interaction.customId === 'join_tank') {
     const group = groups.get(interaction.message.id);
@@ -222,7 +224,7 @@ client.on('interactionCreate', async interaction => {
     await updateGroupMessage(interaction, group);
     return;
   }
-
+ 
   // ── Rejoindre en tant que Heal ──
   if (interaction.isButton() && interaction.customId === 'join_heal') {
     const group = groups.get(interaction.message.id);
@@ -232,7 +234,7 @@ client.on('interactionCreate', async interaction => {
     await updateGroupMessage(interaction, group);
     return;
   }
-
+ 
   // ── Rejoindre en tant que DPS ──
   if (interaction.isButton() && interaction.customId === 'join_dps') {
     const group = groups.get(interaction.message.id);
@@ -243,7 +245,7 @@ client.on('interactionCreate', async interaction => {
     await updateGroupMessage(interaction, group);
     return;
   }
-
+ 
   // ── Quitter le groupe ──
   if (interaction.isButton() && interaction.customId === 'leave_group') {
     const group = groups.get(interaction.message.id);
@@ -255,10 +257,10 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 });
-
+ 
 async function updateGroupMessage(interaction, group) {
   const embed = buildGroupEmbed(group.dungeon, group.level, group.rolesNeeded, group.members);
-
+ 
   const totalNeeded =
     (group.rolesNeeded.has('tank') ? 1 : 0) +
     (group.rolesNeeded.has('heal') ? 1 : 0) +
@@ -268,7 +270,7 @@ async function updateGroupMessage(interaction, group) {
     (group.members.heal ? 1 : 0) +
     group.members.dps.length;
   const isFull = totalFilled >= totalNeeded;
-
+ 
   if (isFull) {
     await interaction.update({ embeds: [embed], components: [] });
     await interaction.followUp({ content: `🎉 **Groupe complet !** <@${group.hostId}> ton groupe est prêt, bonne run !`, ephemeral: false });
@@ -276,7 +278,7 @@ async function updateGroupMessage(interaction, group) {
     await interaction.update({ embeds: [embed], components: [buildJoinButtons(group.rolesNeeded)] });
   }
 }
-
+ 
 // ──────────────────────────────────────────
 // Démarrage
 // ──────────────────────────────────────────
