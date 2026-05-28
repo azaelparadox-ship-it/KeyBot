@@ -17,8 +17,8 @@ const ROLE_DPS_ID    = '1415752676930486347';
 const DUNGEONS = [
   { label: 'Terrasse des Magistères',    value: 'magisters',    emoji: '🌙' },
   { label: 'Flèche de Coursevent',       value: 'coursevent',   emoji: '💨' },
-  { label: 'Gouffre de la Sombrevoie',   value: 'sombrevoie',   emoji: '🌑' },
-  { label: 'Place Parhélion',            value: 'parhelion',    emoji: '☀️' },
+  { label: 'Cavernes de Maisara',       value: 'maisara',   emoji: '🌑' },
+  { label: 'Point-Nexus Xenas',            value: 'parhelion',    emoji: '☀️' },
   { label: 'Orée-du-Ciel',              value: 'oree',         emoji: '🪶' },
   { label: 'Siège du Triumvirat',        value: 'triumvirat',   emoji: '⚔️' },
   { label: "Académie d'Algeth'ar",       value: 'algethar',     emoji: '📚' },
