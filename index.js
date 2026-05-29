@@ -11,7 +11,7 @@ const CLIENT_ID = process.env.CLIENT_ID;
 // Configuration
 // ──────────────────────────────────────────
 const LFG_CHANNEL_ID   = '1509506151866433686';
-const FORUM_CHANNEL_ID = '1508028447845257357'; // ⚠️ Remplace par l'ID du forum "propose-ta-clé"
+const FORUM_CHANNEL_ID = '1509506151866433686'; // ⚠️ Remplace par l'ID du forum "propose-ta-clé"
 const CATEGORY_ID      = '1508028184967512126';
 const ROLE_TANK_ID     = '1415752673910718634';
 const ROLE_HEAL_ID     = '1415752675609284629';
@@ -19,7 +19,7 @@ const ROLE_DPS_ID      = '1415752676930486347';
 const ROLE_MODO_ID     = '1401884404779061369';
 const ROLE_GERANT_ID   = '1508058886794383471';
 
-const GROUP_TIMEOUT_MS = 30 * 60 * 1000;
+const GROUP_TIMEOUT_MS = 60 * 60 * 1000; // 1 heure
 
 // ──────────────────────────────────────────
 // Donjons — Saison 1 Midnight
@@ -157,33 +157,31 @@ async function createPrivateChannels(guild, members, dungeon, level, hostId) {
   const safeName  = dungeonName(dungeon).toLowerCase().replace(/[^a-z0-9]/gi, '-').replace(/-+/g,'-').substring(0,20);
   const name      = `${safeName}-${level}`;
 
-  // Récupère la position du forum pour placer les canaux juste après
-  const forumChannel = await guild.channels.fetch(FORUM_CHANNEL_ID).catch(() => null);
-  const forumPosition = forumChannel ? forumChannel.position + 1 : undefined;
-
   const perms = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
     { id: guild.client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
-    // Modérateurs et Gérants : accès lecture/modération, sans mention donc sans notification
-    { id: ROLE_MODO_ID,   allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.Connect], deny: [PermissionFlagsBits.MentionEveryone] },
-    { id: ROLE_GERANT_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.Connect], deny: [PermissionFlagsBits.MentionEveryone] },
+    // Modos et Gérants : accès silencieux, aucune notification
+    { id: ROLE_MODO_ID,   allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.Connect], deny: [PermissionFlagsBits.MentionEveryone, PermissionFlagsBits.SendMessages] },
+    { id: ROLE_GERANT_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.Connect], deny: [PermissionFlagsBits.MentionEveryone, PermissionFlagsBits.SendMessages] },
     ...memberIds.map(id => ({ id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak] }))
   ];
 
-  const textChannel = await guild.channels.create({
-    name: `🗝️-${name}`,
-    type: ChannelType.GuildText,
-    parent: CATEGORY_ID,
-    permissionOverwrites: perms,
-    position: forumPosition,
-  });
-
+  // Vocal tout en haut de la catégorie
   const voiceChannel = await guild.channels.create({
     name: `🎙️ ${dungeonName(dungeon)} +${level}`,
     type: ChannelType.GuildVoice,
     parent: CATEGORY_ID,
     permissionOverwrites: perms,
-    position: forumPosition ? forumPosition + 1 : undefined,
+    position: 0,
+  });
+
+  // Canal texte juste après
+  const textChannel = await guild.channels.create({
+    name: `🗝️-${name}`,
+    type: ChannelType.GuildText,
+    parent: CATEGORY_ID,
+    permissionOverwrites: perms,
+    position: 1,
   });
 
   const mentions = memberIds.map(id => `<@${id}>`).join(' ');
@@ -269,19 +267,23 @@ async function publishGroup(interaction, session) {
     : '';
   await interaction.editReply({ content: `✅ **Groupe publié !** → <#${thread.id}>${privMsg}`, components: [] });
 
-  // Timer 30 min
+  // Timer 1h → suppression canaux privés seulement si 0 inscrit
   setTimeout(async () => {
     const group = groups.get(thread.id);
     if (!group || group.complete) return;
-    const total  = (group.rolesNeeded.has('tank')?1:0)+(group.rolesNeeded.has('heal')?1:0)+(group.rolesNeeded.has('dps')?3:0);
     const filled = (group.members.tank?1:0)+(group.members.heal?1:0)+group.members.dps.length;
-    if (filled < total) {
-      const t = await guild.channels.fetch(thread.id).catch(() => null);
-      if (t) {
-        await t.send({ content: `😔 **${dungeonName(dungeon)} +${level}** — Dommage, vous avez raté une occasion de vous amuser ensemble. À la prochaine !` });
-        setTimeout(() => t.delete().catch(() => {}), 10000);
+    if (filled === 0) {
+      // Aucun inscrit → on supprime les canaux privés
+      const chanData = group.textChannelId ? privateChans.get(group.textChannelId) : null;
+      if (chanData) {
+        const voiceChan = await guild.channels.fetch(chanData.voiceChannelId).catch(() => null);
+        if (voiceChan) await voiceChan.delete().catch(() => {});
+        const textChan = await guild.channels.fetch(group.textChannelId).catch(() => null);
+        if (textChan) await textChan.delete().catch(() => {});
+        privateChans.delete(group.textChannelId);
       }
     }
+    // Le post forum n'est jamais supprimé automatiquement
     groups.delete(thread.id);
   }, GROUP_TIMEOUT_MS);
 }
@@ -298,12 +300,7 @@ client.once('clientReady', async () => {
   await setupLFGChannel(client);
 });
 
-// Suppression vocal quand vide
-client.on('voiceStateUpdate', async (oldState) => {
-  if (!oldState.channelId) return;
-  const channel = oldState.channel;
-  if (channel && channel.members.size === 0) await channel.delete().catch(() => {});
-});
+// Vocal : suppression uniquement via bouton rouge
 
 client.on('interactionCreate', async interaction => {
   const userId = interaction.user.id;
@@ -431,7 +428,6 @@ client.on('interactionCreate', async interaction => {
     group.complete = true;
     await interaction.update({ embeds: [embed], components: [] });
     await interaction.channel.send({ content: `🎉 ${randomEncouragement()}` });
-    setTimeout(() => interaction.channel.delete().catch(() => {}), GROUP_TIMEOUT_MS);
   } else {
     await interaction.update({ embeds: [embed], components: [joinButtons(group.rolesNeeded)] });
   }
