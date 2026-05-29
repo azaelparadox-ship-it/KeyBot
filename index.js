@@ -11,7 +11,7 @@ const CLIENT_ID = process.env.CLIENT_ID;
 // Configuration
 // ──────────────────────────────────────────
 const LFG_CHANNEL_ID   = '1509506151866433686';
-const FORUM_CHANNEL_ID = '1508028447845257357'; // ⚠️ Remplace par l'ID du forum "propose-ta-clé"
+const FORUM_CHANNEL_ID = '1509506151866433686'; // ⚠️ Remplace par l'ID du forum "propose-ta-clé"
 const CATEGORY_ID      = '1508028184967512126';
 const ROLE_TANK_ID     = '1415752673910718634';
 const ROLE_HEAL_ID     = '1415752675609284629';
@@ -235,6 +235,14 @@ async function publishGroup(interaction, session) {
     },
   });
 
+  // Créer les canaux privés dès la publication
+  let textChannel = null, voiceChannel = null;
+  try {
+    const priv = await createPrivateChannels(guild, members, dungeon, level, interaction.user.id);
+    textChannel  = priv.textChannel;
+    voiceChannel = priv.voiceChannel;
+  } catch (e) { console.error('Erreur canaux privés:', e); }
+
   groups.set(thread.id, {
     dungeon, level,
     rolesNeeded: new Set(roles),
@@ -243,9 +251,14 @@ async function publishGroup(interaction, session) {
     threadId: thread.id,
     guildId: guild.id,
     complete: false,
+    textChannelId: textChannel?.id || null,
+    voiceChannelId: voiceChannel?.id || null,
   });
 
-  await interaction.editReply({ content: `✅ **Groupe publié !** → <#${thread.id}>`, components: [] });
+  const privMsg = textChannel && voiceChannel
+    ? `\n🔒 Votre espace privé : <#${textChannel.id}> et <#${voiceChannel.id}>`
+    : '';
+  await interaction.editReply({ content: `✅ **Groupe publié !** → <#${thread.id}>${privMsg}`, components: [] });
 
   // Timer 30 min
   setTimeout(async () => {
@@ -388,6 +401,14 @@ client.on('interactionCreate', async interaction => {
     else group.members.dps = group.members.dps.filter(id => id !== userId);
   } else return;
 
+  // Donner accès aux canaux privés au nouveau membre
+  if (interaction.customId !== 'leave_group' && group.textChannelId) {
+    const textChan  = await interaction.guild.channels.fetch(group.textChannelId).catch(() => null);
+    const voiceChan = group.voiceChannelId ? await interaction.guild.channels.fetch(group.voiceChannelId).catch(() => null) : null;
+    if (textChan)  await textChan.permissionOverwrites.create(userId,  { ViewChannel: true, SendMessages: true }).catch(() => {});
+    if (voiceChan) await voiceChan.permissionOverwrites.create(userId, { ViewChannel: true, Connect: true, Speak: true }).catch(() => {});
+  }
+
   const total  = (group.rolesNeeded.has('tank')?1:0)+(group.rolesNeeded.has('heal')?1:0)+(group.rolesNeeded.has('dps')?3:0);
   const filled = (group.members.tank?1:0)+(group.members.heal?1:0)+group.members.dps.length;
   const embed  = groupEmbed(group.dungeon, group.level, group.rolesNeeded, group.members);
@@ -397,12 +418,6 @@ client.on('interactionCreate', async interaction => {
     group.complete = true;
     await interaction.update({ embeds: [embed], components: [] });
     await interaction.channel.send({ content: `🎉 ${randomEncouragement()}` });
-    try {
-      const { textChannel, voiceChannel } = await createPrivateChannels(
-        interaction.guild, group.members, group.dungeon, group.level, group.hostId
-      );
-      await interaction.channel.send({ content: `🔒 Votre espace privé est prêt : <#${textChannel.id}> et <#${voiceChannel.id}>` });
-    } catch (e) { console.error('Erreur canaux privés:', e); }
     setTimeout(() => interaction.channel.delete().catch(() => {}), GROUP_TIMEOUT_MS);
   } else {
     await interaction.update({ embeds: [embed], components: [joinButtons(group.rolesNeeded)] });
