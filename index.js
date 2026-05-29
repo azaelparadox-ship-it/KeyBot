@@ -152,7 +152,7 @@ function randomEncouragement() { return ENCOURAGEMENTS[Math.floor(Math.random() 
 // ──────────────────────────────────────────
 async function createPrivateChannels(guild, members, dungeon, level, hostId) {
   const memberIds = [members.tank, members.heal, ...members.dps].filter(Boolean);
-  const safeName  = dungeonName(dungeon).toLowerCase().replace(/[^a-z0-9]/gi, '-').replace(/-+/g,'-').substring(0,20);
+  const safeName  = dungeonName(dungeon).toLowerCase().replace(/[^a-z0-9]/gi, '-').replace(/-+/g,'-').substring(0,30);
   const name      = `${safeName}-${level}`;
 
   // Récupère la position du forum pour placer les canaux juste après
