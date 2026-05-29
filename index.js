@@ -11,11 +11,13 @@ const CLIENT_ID = process.env.CLIENT_ID;
 // Configuration
 // ──────────────────────────────────────────
 const LFG_CHANNEL_ID   = '1509506151866433686';
-const FORUM_CHANNEL_ID = '1508028447845257357'; // ⚠️ Remplace par l'ID du forum "propose-ta-clé"
+const FORUM_CHANNEL_ID = '1509506151866433686'; // ⚠️ Remplace par l'ID du forum "propose-ta-clé"
 const CATEGORY_ID      = '1508028184967512126';
 const ROLE_TANK_ID     = '1415752673910718634';
 const ROLE_HEAL_ID     = '1415752675609284629';
 const ROLE_DPS_ID      = '1415752676930486347';
+const ROLE_MODO_ID     = '1401884404779061369';
+const ROLE_GERANT_ID   = '1508058886794383471';
 
 const GROUP_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -85,7 +87,7 @@ const dungeonSelect = () => new ActionRowBuilder().addComponents(
 );
 const levelSelect = () => new ActionRowBuilder().addComponents(
   new StringSelectMenuBuilder().setCustomId('select_level').setPlaceholder('🔑 Choisir le niveau de clé...')
-    .addOptions([2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30].map(l => ({ label: `+${l}`, value: String(l) })))
+    .addOptions([2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,20].map(l => ({ label: `+${l}`, value: String(l) })))
 );
 const roleToggleButtons = (sel = new Set()) => new ActionRowBuilder().addComponents(
   new ButtonBuilder().setCustomId('toggle_tank').setLabel('🛡️ Tank').setStyle(sel.has('tank') ? ButtonStyle.Primary : ButtonStyle.Secondary),
@@ -152,7 +154,7 @@ function randomEncouragement() { return ENCOURAGEMENTS[Math.floor(Math.random() 
 // ──────────────────────────────────────────
 async function createPrivateChannels(guild, members, dungeon, level, hostId) {
   const memberIds = [members.tank, members.heal, ...members.dps].filter(Boolean);
-  const safeName  = dungeonName(dungeon).toLowerCase().replace(/[^a-z0-9]/gi, '-').replace(/-+/g,'-').substring(0,30);
+  const safeName  = dungeonName(dungeon).toLowerCase().replace(/[^a-z0-9]/gi, '-').replace(/-+/g,'-').substring(0,20);
   const name      = `${safeName}-${level}`;
 
   // Récupère la position du forum pour placer les canaux juste après
@@ -162,6 +164,9 @@ async function createPrivateChannels(guild, members, dungeon, level, hostId) {
   const perms = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
     { id: guild.client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+    // Modérateurs et Gérants : accès lecture/modération, sans mention donc sans notification
+    { id: ROLE_MODO_ID,   allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.Connect], deny: [PermissionFlagsBits.MentionEveryone] },
+    { id: ROLE_GERANT_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.Connect], deny: [PermissionFlagsBits.MentionEveryone] },
     ...memberIds.map(id => ({ id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak] }))
   ];
 
@@ -235,6 +240,10 @@ async function publishGroup(interaction, session) {
     },
   });
 
+  // Modos et Gérants : accès au thread mais sans notification
+  await thread.members.add(guild.roles.cache.get(ROLE_MODO_ID)?.id).catch(() => {});
+  await thread.setAutoArchiveDuration(60).catch(() => {});
+
   // Créer les canaux privés dès la publication
   let textChannel = null, voiceChannel = null;
   try {
@@ -281,7 +290,7 @@ async function publishGroup(interaction, session) {
 // Client
 // ──────────────────────────────────────────
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMembers]
 });
 
 client.once('clientReady', async () => {
@@ -303,15 +312,19 @@ client.on('interactionCreate', async interaction => {
   if (interaction.isButton() && interaction.customId === 'close_channel') {
     const chanData = privateChans.get(interaction.channelId);
     if (!chanData) { await interaction.reply({ content: '❌ Canal introuvable.', ephemeral: true }); return; }
-    if (chanData.hostId !== userId) {
-      await interaction.reply({ content: '❌ Seul le créateur du groupe peut clôturer le canal.', ephemeral: true });
+
+    const member = await interaction.guild.members.fetch(userId).catch(() => null);
+    const isModo   = member?.roles.cache.has(ROLE_MODO_ID);
+    const isGerant = member?.roles.cache.has(ROLE_GERANT_ID);
+    const isHost   = chanData.hostId === userId;
+
+    if (!isHost && !isModo && !isGerant) {
+      await interaction.reply({ content: '❌ Seul le créateur du groupe, un Modérateur ou le Gérant peut clôturer ce canal.', ephemeral: true });
       return;
     }
     await interaction.reply({ content: '🔴 **Clôture du canal en cours...**' });
-    // Supprime le vocal s'il existe encore
     const voiceChannel = await interaction.guild.channels.fetch(chanData.voiceChannelId).catch(() => null);
     if (voiceChannel) await voiceChannel.delete().catch(() => {});
-    // Supprime le canal texte
     setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
     privateChans.delete(interaction.channelId);
     return;
