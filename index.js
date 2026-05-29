@@ -11,7 +11,7 @@ const CLIENT_ID = process.env.CLIENT_ID;
 // Configuration
 // ──────────────────────────────────────────
 const LFG_CHANNEL_ID   = '1509506151866433686';
-const FORUM_CHANNEL_ID = '1509506151866433686'; // ⚠️ Remplace par l'ID du forum "propose-ta-clé"
+const FORUM_CHANNEL_ID = '1508028447845257357'; // ⚠️ Remplace par l'ID du forum "propose-ta-clé"
 const CATEGORY_ID      = '1508028184967512126';
 const ROLE_TANK_ID     = '1415752673910718634';
 const ROLE_HEAL_ID     = '1415752675609284629';
