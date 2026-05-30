@@ -127,9 +127,10 @@ const privateChannelButtons = () => new ActionRowBuilder().addComponents(
 
 // -- Embed du groupe --
 // On affiche tous les roles presents (recherches + celui du createur)
-function groupEmbed(dungeon, level, rolesNeeded, members) {
+function groupEmbed(dungeon, level, rolesNeeded, members, hostUsername = null) {
   const d = DUNGEONS.find(x => x.value === dungeon);
   const lines = [];
+  if (hostUsername) lines.push(`Groupe cree par **${hostUsername}**\n`);
 
   // Tank : affiché si recherché OU si le createur joue tank
   if (rolesNeeded.has('tank') || members.tank) {
@@ -243,10 +244,10 @@ async function publishGroup(interaction, session) {
   }
 
   const thread = await forumChannel.threads.create({
-    name: `${d?.label} - +${level}`,
+    name: `${interaction.user.username} - ${d?.label} - +${level}`,
     message: {
       content: pingLine(roles, hostRole, dungeon, level),
-      embeds: [groupEmbed(dungeon, level, roles, members)],
+      embeds: [groupEmbed(dungeon, level, roles, members, interaction.user.username)],
       components: [joinButtons(roles)]
     },
   });
@@ -263,6 +264,7 @@ async function publishGroup(interaction, session) {
     rolesNeeded: new Set(roles),
     members,
     hostId: interaction.user.id,
+    hostUsername: interaction.user.username,
     threadId: thread.id,
     complete: false,
     textChannelId,
@@ -465,7 +467,7 @@ client.on('interactionCreate', async interaction => {
 
   const total  = (group.rolesNeeded.has('tank')?1:0)+(group.rolesNeeded.has('heal')?1:0)+(group.rolesNeeded.has('dps')?3:0);
   const filled = (group.members.tank?1:0)+(group.members.heal?1:0)+group.members.dps.length;
-  const embed  = groupEmbed(group.dungeon, group.level, group.rolesNeeded, group.members);
+  const embed  = groupEmbed(group.dungeon, group.level, group.rolesNeeded, group.members, group.hostUsername);
   const isFull = filled >= total;
 
   if (isFull) {
