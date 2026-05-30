@@ -35,6 +35,9 @@ const DUNGEONS = [
   { label: 'Fosse de Saron',          value: 'saron',      emoji: '❄️' },
 ];
 
+// Niveaux de clé complets jusqu'à +30
+const KEY_LEVELS = [2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30];
+
 const ENCOURAGEMENTS = [
   "Merci de faire vivre la communauté ! Amusez-vous, c'est la priorité. 🎉",
   "Groupe complet ! Que l'aventure commence. Amusez-vous bien ! ⚔️",
@@ -43,7 +46,7 @@ const ENCOURAGEMENTS = [
 
 const sessions     = new Map(); // userId → session
 const groups       = new Map(); // threadId → groupe
-const privateChans = new Map(); // textChannelId → { voiceChannelId, hostId, closeMsgId }
+const privateChans = new Map(); // textChannelId → { voiceChannelId, hostId }
 
 // ──────────────────────────────────────────
 // Enregistrement /lfm
@@ -85,24 +88,46 @@ const dungeonSelect = () => new ActionRowBuilder().addComponents(
   new StringSelectMenuBuilder().setCustomId('select_dungeon').setPlaceholder('🗺️ Choisir un donjon...')
     .addOptions(DUNGEONS.map(d => ({ label: d.label, value: d.value, emoji: d.emoji })))
 );
-const levelSelect = () => new ActionRowBuilder().addComponents(
-  new StringSelectMenuBuilder().setCustomId('select_level').setPlaceholder('🔑 Choisir le niveau de clé...')
-    .addOptions([2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,20].map(l => ({ label: `+${l}`, value: String(l) })))
-);
+
+// Discord limite à 25 options par menu — on split en deux menus si besoin
+const levelSelectRows = () => {
+  const chunk1 = KEY_LEVELS.slice(0, 25);
+  const chunk2 = KEY_LEVELS.slice(25);
+  const rows = [
+    new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder().setCustomId('select_level')
+        .setPlaceholder('🔑 Choisir le niveau (+2 à +26)...')
+        .addOptions(chunk1.map(l => ({ label: `+${l}`, value: String(l) })))
+    )
+  ];
+  if (chunk2.length > 0) {
+    rows.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder().setCustomId('select_level_high')
+        .setPlaceholder('🔑 Ou niveau élevé (+27 à +30)...')
+        .addOptions(chunk2.map(l => ({ label: `+${l}`, value: String(l) })))
+    ));
+  }
+  return rows;
+};
+
 const roleToggleButtons = (sel = new Set()) => new ActionRowBuilder().addComponents(
   new ButtonBuilder().setCustomId('toggle_tank').setLabel('🛡️ Tank').setStyle(sel.has('tank') ? ButtonStyle.Primary : ButtonStyle.Secondary),
   new ButtonBuilder().setCustomId('toggle_heal').setLabel('💚 Heal').setStyle(sel.has('heal') ? ButtonStyle.Success : ButtonStyle.Secondary),
   new ButtonBuilder().setCustomId('toggle_dps').setLabel('⚔️ DPS').setStyle(sel.has('dps') ? ButtonStyle.Danger : ButtonStyle.Secondary),
   new ButtonBuilder().setCustomId('publish_group').setLabel('Publier le groupe ➜').setStyle(ButtonStyle.Primary).setDisabled(sel.size === 0)
 );
+
+// Le créateur choisit son rôle parmi TOUS les rôles (pas seulement ceux recherchés)
 const hostRoleButtons = (rolesNeeded) => {
   const row = new ActionRowBuilder();
-  if (rolesNeeded.has('tank')) row.addComponents(new ButtonBuilder().setCustomId('host_tank').setLabel('🛡️ Tank').setStyle(ButtonStyle.Primary));
-  if (rolesNeeded.has('heal')) row.addComponents(new ButtonBuilder().setCustomId('host_heal').setLabel('💚 Heal').setStyle(ButtonStyle.Success));
-  if (rolesNeeded.has('dps'))  row.addComponents(new ButtonBuilder().setCustomId('host_dps').setLabel('⚔️ DPS').setStyle(ButtonStyle.Danger));
+  // On affiche tous les rôles possibles — le créateur joue forcément un rôle
+  row.addComponents(new ButtonBuilder().setCustomId('host_tank').setLabel('🛡️ Tank').setStyle(ButtonStyle.Primary));
+  row.addComponents(new ButtonBuilder().setCustomId('host_heal').setLabel('💚 Heal').setStyle(ButtonStyle.Success));
+  row.addComponents(new ButtonBuilder().setCustomId('host_dps').setLabel('⚔️ DPS').setStyle(ButtonStyle.Danger));
   row.addComponents(new ButtonBuilder().setCustomId('host_none').setLabel('Je ne joue pas').setStyle(ButtonStyle.Secondary));
   return row;
 };
+
 const joinButtons = (rolesNeeded) => {
   const row = new ActionRowBuilder();
   if (rolesNeeded.has('tank')) row.addComponents(new ButtonBuilder().setCustomId('join_tank').setLabel('🛡️ Tank').setStyle(ButtonStyle.Primary));
@@ -112,11 +137,13 @@ const joinButtons = (rolesNeeded) => {
   return row;
 };
 
-// Bouton rouge de clôture — épinglé en bas du canal privé
 const closeButton = () => new ActionRowBuilder().addComponents(
   new ButtonBuilder().setCustomId('close_channel').setLabel('🔴 Clôturer la clé et fermer le canal').setStyle(ButtonStyle.Danger)
 );
 
+// ──────────────────────────────────────────
+// Embed du groupe
+// ──────────────────────────────────────────
 function groupEmbed(dungeon, level, rolesNeeded, members) {
   const d = DUNGEONS.find(x => x.value === dungeon);
   const lines = [];
@@ -137,6 +164,7 @@ function groupEmbed(dungeon, level, rolesNeeded, members) {
     .setTimestamp();
 }
 
+// Ping uniquement les rôles encore RECHERCHÉS (pas celui du créateur)
 function pingLine(rolesNeeded, dungeon, level) {
   const d = DUNGEONS.find(x => x.value === dungeon);
   const pings = [];
@@ -149,8 +177,21 @@ function pingLine(rolesNeeded, dungeon, level) {
 function dungeonName(value) { return DUNGEONS.find(d => d.value === value)?.label || value; }
 function randomEncouragement() { return ENCOURAGEMENTS[Math.floor(Math.random() * ENCOURAGEMENTS.length)]; }
 
+// Calcule les rôles encore à trouver après inscription du créateur
+function getRolesStillNeeded(rolesNeeded, hostRole) {
+  const still = new Set(rolesNeeded);
+  // Si le créateur joue un rôle qui était recherché, on le retire des pings
+  if (hostRole === 'tank') still.delete('tank');
+  else if (hostRole === 'heal') still.delete('heal');
+  else if (hostRole === 'dps') {
+    // Pour DPS on garde le ping s'il reste des slots DPS à remplir (max 3)
+    // On ne le retire que si c'était le seul DPS cherché (géré à l'inscription)
+  }
+  return still;
+}
+
 // ──────────────────────────────────────────
-// Création canaux privés juste sous le forum
+// Création canaux privés
 // ──────────────────────────────────────────
 async function createPrivateChannels(guild, members, dungeon, level, hostId) {
   const memberIds = [members.tank, members.heal, ...members.dps].filter(Boolean);
@@ -160,7 +201,7 @@ async function createPrivateChannels(guild, members, dungeon, level, hostId) {
   const perms = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
     { id: guild.client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
-    // Modos et Gérants : accès silencieux, aucune notification
+    // Modos et Gérants : accès silencieux, aucune notification, pas d'envoi de messages
     { id: ROLE_MODO_ID,   allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.Connect], deny: [PermissionFlagsBits.MentionEveryone, PermissionFlagsBits.SendMessages] },
     { id: ROLE_GERANT_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.Connect], deny: [PermissionFlagsBits.MentionEveryone, PermissionFlagsBits.SendMessages] },
     ...memberIds.map(id => ({ id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak] }))
@@ -185,26 +226,19 @@ async function createPrivateChannels(guild, members, dungeon, level, hostId) {
   });
 
   const mentions = memberIds.map(id => `<@${id}>`).join(' ');
-
-  // Message de bienvenue
   await textChannel.send({
-    content: `${mentions}\n🎉 **Votre groupe est prêt !** Rejoignez le vocal <#${voiceChannel.id}>.\n\n${randomEncouragement()}`
+    content: `${mentions}\n🎉 **Votre espace privé est créé !** Rejoignez le vocal <#${voiceChannel.id}> quand vous êtes prêts.`
   });
 
-  // Message avec bouton rouge épinglé
   const closeMsg = await textChannel.send({
     content: `> <@${hostId}> — Quand la run est terminée, clique sur le bouton ci-dessous pour clôturer le canal.`,
     components: [closeButton()]
   });
-
-  // Épingler le message de clôture
   await closeMsg.pin().catch(() => {});
 
-  // Stocker les infos du canal privé
   privateChans.set(textChannel.id, {
     voiceChannelId: voiceChannel.id,
     hostId,
-    closeMsgId: closeMsg.id,
   });
 
   return { textChannel, voiceChannel };
@@ -217,10 +251,15 @@ async function publishGroup(interaction, session) {
   const { dungeon, level, roles, hostRole } = session;
   const guild = interaction.guild;
 
+  // Inscription du créateur selon son rôle
   const members = { tank: null, heal: null, dps: [] };
   if (hostRole === 'tank') members.tank = interaction.user.id;
   else if (hostRole === 'heal') members.heal = interaction.user.id;
   else if (hostRole === 'dps') members.dps.push(interaction.user.id);
+
+  // Les rôles à afficher dans l'embed = tous les rôles recherchés
+  // Les pings = uniquement ceux encore à trouver (on exclut le rôle du créateur s'il était cherché)
+  const rolesForPing = getRolesStillNeeded(roles, hostRole);
 
   const d = DUNGEONS.find(x => x.value === dungeon);
   const forumChannel = await guild.channels.fetch(FORUM_CHANNEL_ID).catch(() => null);
@@ -232,22 +271,18 @@ async function publishGroup(interaction, session) {
   const thread = await forumChannel.threads.create({
     name: `${d?.emoji} ${d?.label} — +${level}`,
     message: {
-      content: pingLine(roles, dungeon, level),
+      content: pingLine(rolesForPing, dungeon, level),
       embeds: [groupEmbed(dungeon, level, roles, members)],
       components: [joinButtons(roles)]
     },
   });
 
-  // Modos et Gérants : accès au thread mais sans notification
-  await thread.members.add(guild.roles.cache.get(ROLE_MODO_ID)?.id).catch(() => {});
-  await thread.setAutoArchiveDuration(60).catch(() => {});
-
-  // Créer les canaux privés dès la publication
-  let textChannel = null, voiceChannel = null;
+  // Canaux privés créés immédiatement
+  let textChannelId = null, voiceChannelId = null;
   try {
     const priv = await createPrivateChannels(guild, members, dungeon, level, interaction.user.id);
-    textChannel  = priv.textChannel;
-    voiceChannel = priv.voiceChannel;
+    textChannelId  = priv.textChannel.id;
+    voiceChannelId = priv.voiceChannel.id;
   } catch (e) { console.error('Erreur canaux privés:', e); }
 
   groups.set(thread.id, {
@@ -258,13 +293,11 @@ async function publishGroup(interaction, session) {
     threadId: thread.id,
     guildId: guild.id,
     complete: false,
-    textChannelId: textChannel?.id || null,
-    voiceChannelId: voiceChannel?.id || null,
+    textChannelId,
+    voiceChannelId,
   });
 
-  const privMsg = textChannel && voiceChannel
-    ? `\n🔒 Votre espace privé : <#${textChannel.id}> et <#${voiceChannel.id}>`
-    : '';
+  const privMsg = textChannelId ? `\n🔒 Ton espace privé : <#${textChannelId}>` : '';
   await interaction.editReply({ content: `✅ **Groupe publié !** → <#${thread.id}>${privMsg}`, components: [] });
 
   // Timer 1h → suppression canaux privés seulement si 0 inscrit
@@ -272,9 +305,8 @@ async function publishGroup(interaction, session) {
     const group = groups.get(thread.id);
     if (!group || group.complete) return;
     const filled = (group.members.tank?1:0)+(group.members.heal?1:0)+group.members.dps.length;
-    if (filled === 0) {
-      // Aucun inscrit → on supprime les canaux privés
-      const chanData = group.textChannelId ? privateChans.get(group.textChannelId) : null;
+    if (filled === 0 && group.textChannelId) {
+      const chanData = privateChans.get(group.textChannelId);
       if (chanData) {
         const voiceChan = await guild.channels.fetch(chanData.voiceChannelId).catch(() => null);
         if (voiceChan) await voiceChan.delete().catch(() => {});
@@ -283,13 +315,12 @@ async function publishGroup(interaction, session) {
         privateChans.delete(group.textChannelId);
       }
     }
-    // Le post forum n'est jamais supprimé automatiquement
     groups.delete(thread.id);
   }, GROUP_TIMEOUT_MS);
 }
 
 // ──────────────────────────────────────────
-// Client
+// Client Discord
 // ──────────────────────────────────────────
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildMembers]
@@ -300,23 +331,19 @@ client.once('clientReady', async () => {
   await setupLFGChannel(client);
 });
 
-// Vocal : suppression uniquement via bouton rouge
-
 client.on('interactionCreate', async interaction => {
   const userId = interaction.user.id;
 
-  // ── Bouton clôture canal privé ──
+  // ── Clôture canal privé ──
   if (interaction.isButton() && interaction.customId === 'close_channel') {
     const chanData = privateChans.get(interaction.channelId);
     if (!chanData) { await interaction.reply({ content: '❌ Canal introuvable.', ephemeral: true }); return; }
-
-    const member = await interaction.guild.members.fetch(userId).catch(() => null);
+    const member   = await interaction.guild.members.fetch(userId).catch(() => null);
     const isModo   = member?.roles.cache.has(ROLE_MODO_ID);
     const isGerant = member?.roles.cache.has(ROLE_GERANT_ID);
     const isHost   = chanData.hostId === userId;
-
     if (!isHost && !isModo && !isGerant) {
-      await interaction.reply({ content: '❌ Seul le créateur du groupe, un Modérateur ou le Gérant peut clôturer ce canal.', ephemeral: true });
+      await interaction.reply({ content: '❌ Seul le créateur, un Modérateur ou le Gérant peut clôturer ce canal.', ephemeral: true });
       return;
     }
     await interaction.reply({ content: '🔴 **Clôture du canal en cours...**' });
@@ -345,12 +372,12 @@ client.on('interactionCreate', async interaction => {
     s.dungeon = interaction.values[0];
     sessions.set(userId, s);
     const d = DUNGEONS.find(x => x.value === s.dungeon);
-    await interaction.update({ content: `## 🗝️ Créer un groupe Mythic+\n✅ **${d?.emoji} ${d?.label}**\n**Étape 2/3** — Niveau de clé :`, components: [levelSelect()] });
+    await interaction.update({ content: `## 🗝️ Créer un groupe Mythic+\n✅ **${d?.emoji} ${d?.label}**\n**Étape 2/3** — Niveau de clé :`, components: levelSelectRows() });
     return;
   }
 
-  // ── Sélection niveau ──
-  if (interaction.isStringSelectMenu() && interaction.customId === 'select_level') {
+  // ── Sélection niveau (les deux menus) ──
+  if (interaction.isStringSelectMenu() && ['select_level','select_level_high'].includes(interaction.customId)) {
     const s = sessions.get(userId);
     if (!s) return;
     s.level = interaction.values[0];
@@ -359,7 +386,7 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // ── Toggle rôles ──
+  // ── Toggle rôles recherchés ──
   if (interaction.isButton() && ['toggle_tank','toggle_heal','toggle_dps'].includes(interaction.customId)) {
     const s = sessions.get(userId);
     if (!s) return;
@@ -370,12 +397,15 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // ── Publier → demander rôle créateur ──
+  // ── Publier → demander rôle du créateur ──
   if (interaction.isButton() && interaction.customId === 'publish_group') {
     const s = sessions.get(userId);
     if (!s || s.roles.size === 0) return;
     const d = DUNGEONS.find(x => x.value === s.dungeon);
-    await interaction.update({ content: `## 🗝️ Créer un groupe Mythic+\n✅ **${d?.emoji} ${d?.label}** — Clé **+${s.level}**\n**Dernière étape** — Quel rôle tu joues ?`, components: [hostRoleButtons(s.roles)] });
+    await interaction.update({
+      content: `## 🗝️ Créer un groupe Mythic+\n✅ **${d?.emoji} ${d?.label}** — Clé **+${s.level}**\n**Dernière étape** — Quel rôle tu joues ?`,
+      components: [hostRoleButtons(s.roles)]
+    });
     return;
   }
 
@@ -395,15 +425,23 @@ client.on('interactionCreate', async interaction => {
   const group = groups.get(interaction.channelId);
   if (!group) return;
 
+  // Vérification : un joueur ne peut s'inscrire que dans un seul rôle
+  const alreadyTank = group.members.tank === userId;
+  const alreadyHeal = group.members.heal === userId;
+  const alreadyDps  = group.members.dps.includes(userId);
+  const alreadyIn   = alreadyTank || alreadyHeal || alreadyDps;
+
   if (interaction.customId === 'join_tank') {
+    if (alreadyIn) { await interaction.reply({ content: '❌ Tu es déjà inscrit dans ce groupe !', ephemeral: true }); return; }
     if (group.members.tank) { await interaction.reply({ content: '❌ Le slot Tank est déjà pris !', ephemeral: true }); return; }
     group.members.tank = userId;
   } else if (interaction.customId === 'join_heal') {
+    if (alreadyIn) { await interaction.reply({ content: '❌ Tu es déjà inscrit dans ce groupe !', ephemeral: true }); return; }
     if (group.members.heal) { await interaction.reply({ content: '❌ Le slot Heal est déjà pris !', ephemeral: true }); return; }
     group.members.heal = userId;
   } else if (interaction.customId === 'join_dps') {
+    if (alreadyIn) { await interaction.reply({ content: '❌ Tu es déjà inscrit dans ce groupe !', ephemeral: true }); return; }
     if (group.members.dps.length >= 3) { await interaction.reply({ content: '❌ Les slots DPS sont tous pris !', ephemeral: true }); return; }
-    if (group.members.dps.includes(userId)) { await interaction.reply({ content: '❌ Tu es déjà inscrit !', ephemeral: true }); return; }
     group.members.dps.push(userId);
   } else if (interaction.customId === 'leave_group') {
     if (group.members.tank === userId) group.members.tank = null;
