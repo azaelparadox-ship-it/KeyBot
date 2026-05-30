@@ -126,16 +126,27 @@ const privateChannelButtons = () => new ActionRowBuilder().addComponents(
 );
 
 // -- Embed du groupe --
+// On affiche tous les roles presents (recherches + celui du createur)
 function groupEmbed(dungeon, level, rolesNeeded, members) {
   const d = DUNGEONS.find(x => x.value === dungeon);
   const lines = [];
-  if (rolesNeeded.has('tank')) lines.push(`Tank - ${members.tank ? `<@${members.tank}>` : 'En attente...'}`);
-  if (rolesNeeded.has('heal')) lines.push(`Heal - ${members.heal ? `<@${members.heal}>` : 'En attente...'}`);
-  if (rolesNeeded.has('dps')) {
-    const filled = members.dps.map(id => `<@${id}>`);
-    const empty  = Array(3 - members.dps.length).fill('En attente...');
-    [...filled, ...empty].forEach(x => lines.push(`DPS - ${x}`));
+
+  // Tank : affiché si recherché OU si le createur joue tank
+  if (rolesNeeded.has('tank') || members.tank) {
+    lines.push(`Tank - ${members.tank ? `<@${members.tank}>` : 'En attente...'}`);
   }
+  // Heal : affiché si recherché OU si le createur joue heal
+  if (rolesNeeded.has('heal') || members.heal) {
+    lines.push(`Heal - ${members.heal ? `<@${members.heal}>` : 'En attente...'}`);
+  }
+  // DPS : affiché si recherché OU si le createur joue DPS
+  if (rolesNeeded.has('dps') || members.dps.length > 0) {
+    const filledDps = members.dps.map(id => `<@${id}>`);
+    const slots = rolesNeeded.has('dps') ? 3 : members.dps.length;
+    const emptyDps = Array(Math.max(0, slots - members.dps.length)).fill('En attente...');
+    [...filledDps, ...emptyDps].forEach(x => lines.push(`DPS - ${x}`));
+  }
+
   const total  = (rolesNeeded.has('tank')?1:0)+(rolesNeeded.has('heal')?1:0)+(rolesNeeded.has('dps')?3:0);
   const filled = (members.tank?1:0)+(members.heal?1:0)+members.dps.length;
   return new EmbedBuilder()
