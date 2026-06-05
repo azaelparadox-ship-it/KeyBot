@@ -8,7 +8,7 @@ const TOKEN     = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
 const LFG_CHANNEL_ID   = '1509506151866433686';
-const FORUM_CHANNEL_ID = '1508028447845257357';
+const FORUM_CHANNEL_ID = '1509506151866433686';
 const CATEGORY_ID      = '1508028184967512126';
 const ROLE_TANK_ID     = '1415752673910718634';
 const ROLE_HEAL_ID     = '1415752675609284629';
@@ -116,6 +116,7 @@ const joinButtons = (rolesNeeded) => {
   if (rolesNeeded.has('heal')) row.addComponents(new ButtonBuilder().setCustomId('join_heal').setLabel('Heal').setStyle(ButtonStyle.Success));
   if (rolesNeeded.has('dps'))  row.addComponents(new ButtonBuilder().setCustomId('join_dps').setLabel('DPS').setStyle(ButtonStyle.Danger));
   row.addComponents(new ButtonBuilder().setCustomId('leave_group').setLabel('Quitter').setStyle(ButtonStyle.Secondary));
+  row.addComponents(new ButtonBuilder().setCustomId('close_inscriptions').setLabel('Cloturer les inscriptions').setStyle(ButtonStyle.Danger));
   return row;
 };
 
@@ -132,15 +133,15 @@ function groupEmbed(dungeon, level, rolesNeeded, members, hostUsername = null) {
   const lines = [];
   if (hostUsername) lines.push(`Groupe cree par **${hostUsername}**\n`);
 
-  // Tank : affiché si recherché OU si le createur joue tank
+  // Tank : affiche si recherche OU si le createur joue tank
   if (rolesNeeded.has('tank') || members.tank) {
     lines.push(`Tank - ${members.tank ? `<@${members.tank}>` : 'En attente...'}`);
   }
-  // Heal : affiché si recherché OU si le createur joue heal
+  // Heal : affiche si recherche OU si le createur joue heal
   if (rolesNeeded.has('heal') || members.heal) {
     lines.push(`Heal - ${members.heal ? `<@${members.heal}>` : 'En attente...'}`);
   }
-  // DPS : affiché si recherché OU si le createur joue DPS
+  // DPS : affiche si recherche OU si le createur joue DPS
   if (rolesNeeded.has('dps') || members.dps.length > 0) {
     const filledDps = members.dps.map(id => `<@${id}>`);
     const slots = rolesNeeded.has('dps') ? 3 : members.dps.length;
@@ -148,13 +149,14 @@ function groupEmbed(dungeon, level, rolesNeeded, members, hostUsername = null) {
     [...filledDps, ...emptyDps].forEach(x => lines.push(`DPS - ${x}`));
   }
 
-  const total  = (rolesNeeded.has('tank')?1:0)+(rolesNeeded.has('heal')?1:0)+(rolesNeeded.has('dps')?3:0);
+  // Total toujours 5 joueurs (1 tank + 1 heal + 3 DPS)
+  const TOTAL = 5;
   const filled = (members.tank?1:0)+(members.heal?1:0)+members.dps.length;
   return new EmbedBuilder()
     .setTitle(`${d?.label} - Cle +${level}`)
     .setDescription(lines.join('\n'))
-    .setColor(filled >= total ? 0x57ab5a : 0x5865f2)
-    .setFooter({ text: filled >= total ? 'Groupe complet !' : `${filled}/${total} joueurs - Saison 1 Midnight` })
+    .setColor(filled >= TOTAL ? 0x57ab5a : 0x5865f2)
+    .setFooter({ text: filled >= TOTAL ? 'Groupe complet !' : `${filled}/${TOTAL} joueurs - Saison 1 Midnight` })
     .setTimestamp();
 }
 
@@ -244,10 +246,10 @@ async function publishGroup(interaction, session) {
   }
 
   const thread = await forumChannel.threads.create({
-    name: `${interaction.user.username} - ${d?.label} - +${level}`,
+    name: `${interaction.member.displayName} - ${d?.label} - +${level}`,
     message: {
       content: pingLine(roles, hostRole, dungeon, level),
-      embeds: [groupEmbed(dungeon, level, roles, members, interaction.user.username)],
+      embeds: [groupEmbed(dungeon, level, roles, members, interaction.member.displayName)],
       components: [joinButtons(roles)]
     },
   });
@@ -264,7 +266,7 @@ async function publishGroup(interaction, session) {
     rolesNeeded: new Set(roles),
     members,
     hostId: interaction.user.id,
-    hostUsername: interaction.user.username,
+    hostUsername: interaction.member.displayName,
     threadId: thread.id,
     complete: false,
     textChannelId,
@@ -465,10 +467,11 @@ client.on('interactionCreate', async interaction => {
     if (voiceChan) await voiceChan.permissionOverwrites.create(userId, { ViewChannel: true, Connect: true, Speak: true }).catch(() => {});
   }
 
-  const total  = (group.rolesNeeded.has('tank')?1:0)+(group.rolesNeeded.has('heal')?1:0)+(group.rolesNeeded.has('dps')?3:0);
+  // Total = toujours 5 joueurs (1 tank + 1 heal + 3 DPS)
+  const TOTAL_PLAYERS = 5;
   const filled = (group.members.tank?1:0)+(group.members.heal?1:0)+group.members.dps.length;
   const embed  = groupEmbed(group.dungeon, group.level, group.rolesNeeded, group.members, group.hostUsername);
-  const isFull = filled >= total;
+  const isFull = filled >= TOTAL_PLAYERS;
 
   if (isFull) {
     group.complete = true;
@@ -477,6 +480,28 @@ client.on('interactionCreate', async interaction => {
   } else {
     await interaction.update({ embeds: [embed], components: [joinButtons(group.rolesNeeded)] });
   }
+});
+
+// -- Handler cloture des inscriptions --
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isButton() || interaction.customId !== 'close_inscriptions') return;
+  const group = groups.get(interaction.channelId);
+  if (!group) return;
+
+  const member   = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  const isModo   = member?.roles.cache.has(ROLE_MODO_ID);
+  const isGerant = member?.roles.cache.has(ROLE_GERANT_ID);
+  const isHost   = group.hostId === interaction.user.id;
+
+  if (!isHost && !isModo && !isGerant) {
+    await interaction.reply({ content: 'Seul le createur, un Moderateur ou le Gerant peut cloturer les inscriptions.', ephemeral: true });
+    return;
+  }
+
+  group.complete = true;
+  const embed = groupEmbed(group.dungeon, group.level, group.rolesNeeded, group.members, group.hostUsername);
+  await interaction.update({ embeds: [embed], components: [] });
+  await interaction.channel.send({ content: 'Inscriptions cloturees par le createur du groupe.' });
 });
 
 registerCommands().then(() => client.login(TOKEN));
