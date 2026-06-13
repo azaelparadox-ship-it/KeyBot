@@ -8,7 +8,7 @@ const TOKEN     = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
 const LFG_CHANNEL_ID   = '1509506151866433686';
-const FORUM_CHANNEL_ID = '1508028447845257357';
+const FORUM_CHANNEL_ID = '1509506151866433686';
 const CATEGORY_ID      = '1508028184967512126';
 const ROLE_TANK_ID     = '1415752673910718634';
 const ROLE_HEAL_ID     = '1415752675609284629';
@@ -39,6 +39,8 @@ const ENCOURAGEMENTS = [
 const sessions     = new Map();
 const groups       = new Map();
 const privateChans = new Map();
+const activeGroups = new Set(); // userId des createurs ayant un groupe actif
+const activeGroups = new Set(); // userId des createurs avec un groupe actif
 
 // -- Commande /lfm --
 async function registerCommands() {
@@ -93,11 +95,22 @@ const levelSelectRows = () => {
   return rows;
 };
 
+// Etape 3a : choisir les roles (tank/heal/dps)
 const roleToggleButtons = (sel = new Set()) => new ActionRowBuilder().addComponents(
   new ButtonBuilder().setCustomId('toggle_tank').setLabel('Tank').setStyle(sel.has('tank') ? ButtonStyle.Primary : ButtonStyle.Secondary),
   new ButtonBuilder().setCustomId('toggle_heal').setLabel('Heal').setStyle(sel.has('heal') ? ButtonStyle.Success : ButtonStyle.Secondary),
   new ButtonBuilder().setCustomId('toggle_dps').setLabel('DPS').setStyle(sel.has('dps') ? ButtonStyle.Danger : ButtonStyle.Secondary),
   new ButtonBuilder().setCustomId('publish_group').setLabel('Publier le groupe').setStyle(ButtonStyle.Primary).setDisabled(sel.size === 0)
+);
+
+// Etape 3b : choisir le nombre de DPS (affiché uniquement si DPS est selectionne)
+const dpsCountSelect = () => new ActionRowBuilder().addComponents(
+  new StringSelectMenuBuilder().setCustomId('select_dps_count').setPlaceholder('Combien de DPS tu cherches ?')
+    .addOptions([
+      { label: '1 DPS', value: '1' },
+      { label: '2 DPS', value: '2' },
+      { label: '3 DPS', value: '3' },
+    ])
 );
 
 // Tous les roles affiches pour le createur
@@ -127,30 +140,28 @@ const privateChannelButtons = () => new ActionRowBuilder().addComponents(
 );
 
 // -- Embed du groupe --
-// On affiche tous les roles presents (recherches + celui du createur)
-function groupEmbed(dungeon, level, rolesNeeded, members, hostUsername = null) {
+function groupEmbed(dungeon, level, rolesNeeded, members, hostUsername = null, dpsCount = 3) {
   const d = DUNGEONS.find(x => x.value === dungeon);
   const lines = [];
   if (hostUsername) lines.push(`Groupe cree par **${hostUsername}**\n`);
 
-  // Tank : affiche si recherche OU si le createur joue tank
   if (rolesNeeded.has('tank') || members.tank) {
     lines.push(`Tank - ${members.tank ? `<@${members.tank}>` : 'En attente...'}`);
   }
-  // Heal : affiche si recherche OU si le createur joue heal
   if (rolesNeeded.has('heal') || members.heal) {
     lines.push(`Heal - ${members.heal ? `<@${members.heal}>` : 'En attente...'}`);
   }
-  // DPS : affiche si recherche OU si le createur joue DPS
   if (rolesNeeded.has('dps') || members.dps.length > 0) {
     const filledDps = members.dps.map(id => `<@${id}>`);
-    const slots = rolesNeeded.has('dps') ? 3 : members.dps.length;
+    const slots = rolesNeeded.has('dps') ? dpsCount : members.dps.length;
     const emptyDps = Array(Math.max(0, slots - members.dps.length)).fill('En attente...');
     [...filledDps, ...emptyDps].forEach(x => lines.push(`DPS - ${x}`));
   }
 
-  // Total toujours 5 joueurs (1 tank + 1 heal + 3 DPS)
-  const TOTAL = 5;
+  const TOTAL = (rolesNeeded.has('tank')?1:0) + (rolesNeeded.has('heal')?1:0) + (rolesNeeded.has('dps')?dpsCount:0)
+    + ((!rolesNeeded.has('tank') && members.tank)?1:0)
+    + ((!rolesNeeded.has('heal') && members.heal)?1:0)
+    + ((!rolesNeeded.has('dps') && members.dps.length > 0)?members.dps.length:0);
   const filled = (members.tank?1:0)+(members.heal?1:0)+members.dps.length;
   return new EmbedBuilder()
     .setTitle(`${d?.label} - Cle +${level}`)
@@ -230,7 +241,7 @@ async function createPrivateChannels(guild, members, dungeon, level, hostId) {
 
 // -- Publication dans le forum --
 async function publishGroup(interaction, session) {
-  const { dungeon, level, roles, hostRole } = session;
+  const { dungeon, level, roles, hostRole, dpsCount } = session;
   const guild = interaction.guild;
 
   const members = { tank: null, heal: null, dps: [] };
@@ -249,8 +260,8 @@ async function publishGroup(interaction, session) {
     name: `${interaction.member.displayName} - ${d?.label} - +${level}`,
     message: {
       content: pingLine(roles, hostRole, dungeon, level),
-      embeds: [groupEmbed(dungeon, level, roles, members, interaction.member.displayName)],
-      components: [joinButtons(roles)]
+      embeds: [groupEmbed(dungeon, level, roles, members, interaction.member.displayName, dpsCount)],
+      components: [joinButtons(roles, dpsCount)]
     },
   });
 
@@ -261,9 +272,13 @@ async function publishGroup(interaction, session) {
     voiceChannelId = priv.voiceChannel.id;
   } catch (e) { console.error('Erreur canaux prives:', e); }
 
+  // Marquer le createur comme ayant un groupe actif
+  activeGroups.add(interaction.user.id);
+
   groups.set(thread.id, {
     dungeon, level,
     rolesNeeded: new Set(roles),
+    dpsCount: dpsCount || 3,
     members,
     hostId: interaction.user.id,
     hostUsername: interaction.member.displayName,
@@ -276,7 +291,7 @@ async function publishGroup(interaction, session) {
   const privMsg = textChannelId ? ` - Espace prive : <#${textChannelId}>` : '';
   await interaction.editReply({ content: `Groupe publie ! <#${thread.id}>${privMsg}`, components: [] });
 
-  // Timer 1h - supprime les canaux prives seulement si 0 inscrit
+  // Timer 1h
   setTimeout(async () => {
     const group = groups.get(thread.id);
     if (!group || group.complete) return;
@@ -291,6 +306,7 @@ async function publishGroup(interaction, session) {
         privateChans.delete(group.textChannelId);
       }
     }
+    activeGroups.delete(interaction.user.id);
     groups.delete(thread.id);
   }, GROUP_TIMEOUT_MS);
 }
@@ -367,7 +383,12 @@ client.on('interactionCreate', async interaction => {
 
   // -- Ouvrir menu creation --
   const openMenu = async () => {
-    sessions.set(userId, { dungeon: null, level: null, roles: new Set(), hostRole: null });
+    // Limite 1 groupe actif par utilisateur
+    if (activeGroups.has(userId)) {
+      await interaction.reply({ content: 'Tu as deja un groupe actif ! Cloture-le avant d\'en creer un nouveau.', ephemeral: true });
+      return;
+    }
+    sessions.set(userId, { dungeon: null, level: null, roles: new Set(), dpsCount: 3, hostRole: null });
     await interaction.reply({
       content: 'Creer un groupe Mythic+\nEtape 1/3 - Choisis le donjon :',
       components: [dungeonSelect()],
@@ -379,7 +400,7 @@ client.on('interactionCreate', async interaction => {
 
   // -- Selection donjon --
   if (interaction.isStringSelectMenu() && interaction.customId === 'select_dungeon') {
-    const s = sessions.get(userId) || { dungeon: null, level: null, roles: new Set(), hostRole: null };
+    const s = sessions.get(userId) || { dungeon: null, level: null, roles: new Set(), dpsCount: 3, hostRole: null };
     s.dungeon = interaction.values[0];
     sessions.set(userId, s);
     const d = DUNGEONS.find(x => x.value === s.dungeon);
@@ -398,13 +419,40 @@ client.on('interactionCreate', async interaction => {
   }
 
   // -- Toggle roles --
-  if (interaction.isButton() && ['toggle_tank','toggle_heal','toggle_dps'].includes(interaction.customId)) {
+  if (interaction.isButton() && ['toggle_tank','toggle_heal'].includes(interaction.customId)) {
     const s = sessions.get(userId);
     if (!s) return;
     const role = interaction.customId.replace('toggle_', '');
     s.roles.has(role) ? s.roles.delete(role) : s.roles.add(role);
     const d = DUNGEONS.find(x => x.value === s.dungeon);
     await interaction.update({ content: `Etape 3/3 - Roles recherches :\n${d?.label} +${s.level}`, components: [roleToggleButtons(s.roles)] });
+    return;
+  }
+
+  // -- Toggle DPS -> affiche le selecteur de nombre --
+  if (interaction.isButton() && interaction.customId === 'toggle_dps') {
+    const s = sessions.get(userId);
+    if (!s) return;
+    const d = DUNGEONS.find(x => x.value === s.dungeon);
+    if (s.roles.has('dps')) {
+      // Desactiver DPS
+      s.roles.delete('dps');
+      await interaction.update({ content: `Etape 3/3 - Roles recherches :\n${d?.label} +${s.level}`, components: [roleToggleButtons(s.roles)] });
+    } else {
+      // Activer DPS -> demander combien
+      s.roles.add('dps');
+      await interaction.update({ content: `Combien de DPS tu cherches ?\n${d?.label} +${s.level}`, components: [dpsCountSelect()] });
+    }
+    return;
+  }
+
+  // -- Selection nombre de DPS --
+  if (interaction.isStringSelectMenu() && interaction.customId === 'select_dps_count') {
+    const s = sessions.get(userId);
+    if (!s) return;
+    s.dpsCount = parseInt(interaction.values[0]);
+    const d = DUNGEONS.find(x => x.value === s.dungeon);
+    await interaction.update({ content: `Etape 3/3 - Roles recherches (${s.dpsCount} DPS) :\n${d?.label} +${s.level}`, components: [roleToggleButtons(s.roles)] });
     return;
   }
 
@@ -451,7 +499,7 @@ client.on('interactionCreate', async interaction => {
     group.members.heal = userId;
   } else if (interaction.customId === 'join_dps') {
     if (alreadyIn) { await interaction.reply({ content: 'Tu es deja inscrit dans ce groupe !', ephemeral: true }); return; }
-    if (group.members.dps.length >= 3) { await interaction.reply({ content: 'Les slots DPS sont tous pris !', ephemeral: true }); return; }
+    if (group.members.dps.length >= (group.dpsCount || 3)) { await interaction.reply({ content: 'Les slots DPS sont tous pris !', ephemeral: true }); return; }
     group.members.dps.push(userId);
   } else if (interaction.customId === 'leave_group') {
     if (group.members.tank === userId) group.members.tank = null;
@@ -467,10 +515,14 @@ client.on('interactionCreate', async interaction => {
     if (voiceChan) await voiceChan.permissionOverwrites.create(userId, { ViewChannel: true, Connect: true, Speak: true }).catch(() => {});
   }
 
-  // Total = toujours 5 joueurs (1 tank + 1 heal + 3 DPS)
-  const TOTAL_PLAYERS = 5;
+  // Total = roles recherches + role du createur
+  const dpsCount = group.dpsCount || 3;
+  const TOTAL_PLAYERS = (group.rolesNeeded.has('tank')?1:0) + (group.rolesNeeded.has('heal')?1:0) + (group.rolesNeeded.has('dps')?dpsCount:0)
+    + ((!group.rolesNeeded.has('tank') && group.members.tank)?1:0)
+    + ((!group.rolesNeeded.has('heal') && group.members.heal)?1:0)
+    + ((!group.rolesNeeded.has('dps') && group.members.dps.length > 0)?group.members.dps.length:0);
   const filled = (group.members.tank?1:0)+(group.members.heal?1:0)+group.members.dps.length;
-  const embed  = groupEmbed(group.dungeon, group.level, group.rolesNeeded, group.members, group.hostUsername);
+  const embed  = groupEmbed(group.dungeon, group.level, group.rolesNeeded, group.members, group.hostUsername, dpsCount);
   const isFull = filled >= TOTAL_PLAYERS;
 
   if (isFull) {
@@ -499,7 +551,7 @@ client.on('interactionCreate', async interaction => {
   }
 
   group.complete = true;
-  const embed = groupEmbed(group.dungeon, group.level, group.rolesNeeded, group.members, group.hostUsername);
+  const embed = groupEmbed(group.dungeon, group.level, group.rolesNeeded, group.members, group.hostUsername, group.dpsCount || 3);
   await interaction.update({ embeds: [embed], components: [] });
   await interaction.channel.send({ content: 'Inscriptions cloturees par le createur du groupe.' });
 });
