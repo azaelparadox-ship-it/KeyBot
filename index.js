@@ -8,7 +8,7 @@ const TOKEN     = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
 const LFG_CHANNEL_ID   = '1509506151866433686';
-const FORUM_CHANNEL_ID = '1508028447845257357';
+const FORUM_CHANNEL_ID = '1509506151866433686';
 const CATEGORY_ID      = '1508028184967512126';
 const ROLE_TANK_ID     = '1415752673910718634';
 const ROLE_HEAL_ID     = '1415752675609284629';
@@ -132,10 +132,11 @@ const joinButtons = (rolesNeeded) => {
   return row;
 };
 
-// Boutons canal prive : bleu (recreer vocal) + rouge (cloturer)
+// Boutons canal prive : bleu (recreer vocal) + rouge (cloturer texte seulement)
 const privateChannelButtons = () => new ActionRowBuilder().addComponents(
   new ButtonBuilder().setCustomId('recreate_voice').setLabel('Recreer le salon vocal').setStyle(ButtonStyle.Primary),
-  new ButtonBuilder().setCustomId('close_channel').setLabel('Cloturer la cle et fermer le canal').setStyle(ButtonStyle.Danger)
+  new ButtonBuilder().setCustomId('close_voice').setLabel('Fermer le salon vocal').setStyle(ButtonStyle.Secondary),
+  new ButtonBuilder().setCustomId('close_channel').setLabel('Cloturer et fermer le canal texte').setStyle(ButtonStyle.Danger)
 );
 
 // -- Embed du groupe --
@@ -360,7 +361,47 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // -- Cloture canal prive --
+  // -- Fermer le salon vocal manuellement --
+  if (interaction.isButton() && interaction.customId === 'close_voice') {
+    const chanData = privateChans.get(interaction.channelId);
+    if (!chanData) { await interaction.reply({ content: 'Canal introuvable.', ephemeral: true }); return; }
+    const member   = await interaction.guild.members.fetch(userId).catch(() => null);
+    const isModo   = member?.roles.cache.has(ROLE_MODO_ID);
+    const isGerant = member?.roles.cache.has(ROLE_GERANT_ID);
+    const isHost   = chanData.hostId === userId;
+    if (!isHost && !isModo && !isGerant) {
+      await interaction.reply({ content: 'Seul le createur, un Moderateur ou le Gerant peut fermer le vocal.', ephemeral: true });
+      return;
+    }
+    const voiceChannel = await interaction.guild.channels.fetch(chanData.voiceChannelId).catch(() => null);
+    if (voiceChannel) {
+      await voiceChannel.delete().catch(() => {});
+      chanData.voiceChannelId = null;
+      await interaction.reply({ content: 'Salon vocal ferme.', ephemeral: true });
+    } else {
+      await interaction.reply({ content: 'Le salon vocal est deja ferme.', ephemeral: true });
+    }
+    return;
+  }
+
+  // -- Cloture des inscriptions (forum) --
+  if (interaction.isButton() && interaction.customId === 'close_inscriptions') {
+    const group = groups.get(interaction.channelId);
+    if (!group) return;
+    const member   = await interaction.guild.members.fetch(userId).catch(() => null);
+    const isModo   = member?.roles.cache.has(ROLE_MODO_ID);
+    const isGerant = member?.roles.cache.has(ROLE_GERANT_ID);
+    const isHost   = group.hostId === userId;
+    if (!isHost && !isModo && !isGerant) {
+      await interaction.reply({ content: 'Seul le createur, un Moderateur ou le Gerant peut cloturer les inscriptions.', ephemeral: true });
+      return;
+    }
+    group.complete = true;
+    const embed = groupEmbed(group.dungeon, group.level, group.rolesNeeded, group.members, group.hostUsername, group.dpsCount || 3);
+    await interaction.update({ embeds: [embed], components: [] });
+    await interaction.channel.send({ content: 'Inscriptions cloturees par le createur du groupe.' });
+    return;
+  }
   if (interaction.isButton() && interaction.customId === 'close_channel') {
     const chanData = privateChans.get(interaction.channelId);
     if (!chanData) { await interaction.reply({ content: 'Canal introuvable.', ephemeral: true }); return; }
@@ -372,9 +413,8 @@ client.on('interactionCreate', async interaction => {
       await interaction.reply({ content: 'Seul le createur, un Moderateur ou le Gerant peut cloturer ce canal.', ephemeral: true });
       return;
     }
-    await interaction.reply({ content: 'Cloture du canal en cours...' });
-    const voiceChannel = await interaction.guild.channels.fetch(chanData.voiceChannelId).catch(() => null);
-    if (voiceChannel) await voiceChannel.delete().catch(() => {});
+    await interaction.reply({ content: 'Cloture du canal texte en cours... Le salon vocal reste actif tant que vous en avez besoin.' });
+    // On supprime uniquement le canal texte, pas le vocal
     setTimeout(() => interaction.channel.delete().catch(() => {}), 2000);
     privateChans.delete(interaction.channelId);
     return;
@@ -533,26 +573,5 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-// -- Handler cloture des inscriptions --
-client.on('interactionCreate', async interaction => {
-  if (!interaction.isButton() || interaction.customId !== 'close_inscriptions') return;
-  const group = groups.get(interaction.channelId);
-  if (!group) return;
-
-  const member   = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
-  const isModo   = member?.roles.cache.has(ROLE_MODO_ID);
-  const isGerant = member?.roles.cache.has(ROLE_GERANT_ID);
-  const isHost   = group.hostId === interaction.user.id;
-
-  if (!isHost && !isModo && !isGerant) {
-    await interaction.reply({ content: 'Seul le createur, un Moderateur ou le Gerant peut cloturer les inscriptions.', ephemeral: true });
-    return;
-  }
-
-  group.complete = true;
-  const embed = groupEmbed(group.dungeon, group.level, group.rolesNeeded, group.members, group.hostUsername, group.dpsCount || 3);
-  await interaction.update({ embeds: [embed], components: [] });
-  await interaction.channel.send({ content: 'Inscriptions cloturees par le createur du groupe.' });
-});
 
 registerCommands().then(() => client.login(TOKEN));
