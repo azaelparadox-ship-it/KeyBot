@@ -40,7 +40,6 @@ const sessions     = new Map();
 const groups       = new Map();
 const privateChans = new Map();
 const activeGroups = new Set(); // userId des createurs ayant un groupe actif
-const activeGroups = new Set(); // userId des createurs avec un groupe actif
 
 // -- Commande /lfm --
 async function registerCommands() {
