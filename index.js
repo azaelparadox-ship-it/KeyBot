@@ -39,7 +39,6 @@ const ENCOURAGEMENTS = [
 const sessions     = new Map();
 const groups       = new Map();
 const privateChans = new Map();
-const activeGroups = new Set(); // userId des createurs ayant un groupe actif
 
 // -- Commande /lfm --
 async function registerCommands() {
@@ -272,9 +271,6 @@ async function publishGroup(interaction, session) {
     voiceChannelId = priv.voiceChannel.id;
   } catch (e) { console.error('Erreur canaux prives:', e); }
 
-  // Marquer le createur comme ayant un groupe actif
-  activeGroups.add(interaction.user.id);
-
   groups.set(thread.id, {
     dungeon, level,
     rolesNeeded: new Set(roles),
@@ -306,7 +302,6 @@ async function publishGroup(interaction, session) {
         privateChans.delete(group.textChannelId);
       }
     }
-    activeGroups.delete(interaction.user.id);
     groups.delete(thread.id);
   }, GROUP_TIMEOUT_MS);
 }
@@ -422,11 +417,6 @@ client.on('interactionCreate', async interaction => {
 
   // -- Ouvrir menu creation --
   const openMenu = async () => {
-    // Limite 1 groupe actif par utilisateur
-    if (activeGroups.has(userId)) {
-      await interaction.reply({ content: 'Tu as deja un groupe actif ! Cloture-le avant d\'en creer un nouveau.', ephemeral: true });
-      return;
-    }
     sessions.set(userId, { dungeon: null, level: null, roles: new Set(), dpsCount: 3, hostRole: null });
     await interaction.reply({
       content: 'Creer un groupe Mythic+\nEtape 1/3 - Choisis le donjon :',
