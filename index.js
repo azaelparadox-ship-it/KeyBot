@@ -7,15 +7,16 @@ const {
 const TOKEN     = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
-const LFG_CHANNEL_ID   = '1509506151866433686';
-const FORUM_CHANNEL_ID = '1508028447845257357';
-const CATEGORY_ID      = '1508028184967512126';
-const ROLE_TANK_ID     = '1415752673910718634';
-const ROLE_HEAL_ID     = '1415752675609284629';
-const ROLE_DPS_ID      = '1415752676930486347';
-const ROLE_MODO_ID     = '1401884404779061369';
-const ROLE_GERANT_ID   = '1508058886794383471';
-const GROUP_TIMEOUT_MS = 60 * 60 * 1000;
+const LFG_CHANNEL_ID    = '1509506151866433686';
+const FORUM_CHANNEL_ID  = '1508028447845257357';
+const CATEGORY_ID       = '1508028184967512126';
+const ROLE_TANK_ID      = '1415752673910718634';
+const ROLE_HEAL_ID      = '1415752675609284629';
+const ROLE_DPS_ID       = '1415752676930486347';
+const ROLE_MODO_ID      = '1401884404779061369';
+const ROLE_GERANT_ID    = '1508058886794383471';
+const ROLE_COMMUNITY_ID = '1401886755384332320';
+const GROUP_TIMEOUT_MS  = 60 * 60 * 1000;
 
 const DUNGEONS = [
   { label: 'Terrasse des Magisteres', value: 'magisters',  emoji: '🌙' },
@@ -112,7 +113,7 @@ const dpsCountSelect = () => new ActionRowBuilder().addComponents(
 );
 
 // Tous les roles affiches pour le createur
-const hostRoleButtons = () => {
+const hostRoleButtons = (hasVocalMembers = false) => {
   const row = new ActionRowBuilder();
   row.addComponents(new ButtonBuilder().setCustomId('host_tank').setLabel('Tank').setStyle(ButtonStyle.Primary));
   row.addComponents(new ButtonBuilder().setCustomId('host_heal').setLabel('Heal').setStyle(ButtonStyle.Success));
@@ -120,6 +121,40 @@ const hostRoleButtons = () => {
   row.addComponents(new ButtonBuilder().setCustomId('host_none').setLabel('Je ne joue pas').setStyle(ButtonStyle.Secondary));
   return row;
 };
+
+// Bouton import vocal (ligne separee)
+const importVocalButton = () => new ActionRowBuilder().addComponents(
+  new ButtonBuilder().setCustomId('import_vocal').setLabel('Importer le groupe vocal').setStyle(ButtonStyle.Primary)
+);
+
+// Detecte les membres dans le vocal du createur et leur role
+async function detectVocalMembers(guild, userId) {
+  // Cherche dans quel salon vocal est le createur
+  const member = await guild.members.fetch(userId).catch(() => null);
+  if (!member?.voice?.channelId) return null;
+  const voiceChannel = await guild.channels.fetch(member.voice.channelId).catch(() => null);
+  if (!voiceChannel) return null;
+
+  const results = [];
+  for (const [, m] of voiceChannel.members) {
+    if (m.id === userId) continue; // on skip le createur lui-meme
+    const hasTank = m.roles.cache.has(ROLE_TANK_ID);
+    const hasHeal = m.roles.cache.has(ROLE_HEAL_ID);
+    const hasDps  = m.roles.cache.has(ROLE_DPS_ID);
+    const hasCommunity = m.roles.cache.has(ROLE_COMMUNITY_ID);
+    const roleCount = [hasTank, hasHeal, hasDps].filter(Boolean).length;
+
+    results.push({
+      id: m.id,
+      displayName: m.displayName,
+      hasTank, hasHeal, hasDps,
+      hasCommunity,
+      roleCount,
+      autoRole: roleCount === 1 ? (hasTank ? 'tank' : hasHeal ? 'heal' : 'dps') : null,
+    });
+  }
+  return { channelId: voiceChannel.id, members: results };
+}
 
 const joinButtons = (rolesNeeded) => {
   const row = new ActionRowBuilder();
@@ -240,13 +275,22 @@ async function createPrivateChannels(guild, members, dungeon, level, hostId) {
 
 // -- Publication dans le forum --
 async function publishGroup(interaction, session) {
-  const { dungeon, level, roles, hostRole, dpsCount } = session;
+  const { dungeon, level, roles, hostRole, dpsCount, preImport } = session;
   const guild = interaction.guild;
 
   const members = { tank: null, heal: null, dps: [] };
   if (hostRole === 'tank') members.tank = interaction.user.id;
   else if (hostRole === 'heal') members.heal = interaction.user.id;
   else if (hostRole === 'dps') members.dps.push(interaction.user.id);
+
+  // Appliquer les pre-inscriptions du vocal
+  if (preImport && preImport.length > 0) {
+    for (const p of preImport) {
+      if (p.role === 'tank' && !members.tank) members.tank = p.id;
+      else if (p.role === 'heal' && !members.heal) members.heal = p.id;
+      else if (p.role === 'dps' && members.dps.length < (dpsCount || 3)) members.dps.push(p.id);
+    }
+  }
 
   const d = DUNGEONS.find(x => x.value === dungeon);
   const forumChannel = await guild.channels.fetch(FORUM_CHANNEL_ID).catch(() => null);
@@ -490,12 +534,93 @@ client.on('interactionCreate', async interaction => {
     const s = sessions.get(userId);
     if (!s || s.roles.size === 0) return;
     const d = DUNGEONS.find(x => x.value === s.dungeon);
+
+    // Detecter si le createur est dans un vocal avec des gens
+    const vocalData = await detectVocalMembers(interaction.guild, userId);
+    const hasVocalMembers = vocalData && vocalData.members.length > 0;
+
+    const components = [hostRoleButtons()];
+    if (hasVocalMembers) {
+      components.push(importVocalButton());
+      s.vocalData = vocalData;
+      sessions.set(userId, s);
+    }
+
     await interaction.update({
-      content: `Derniere etape - Quel role tu joues ?\n${d?.label} +${s.level}`,
+      content: `Derniere etape - Quel role tu joues ?\n${d?.label} +${s.level}${hasVocalMembers ? `\n\n*${vocalData.members.length} personne(s) detectee(s) dans ton vocal — tu peux les importer !*` : ''}`,
+      components
+    });
+    return;
+  }
+
+  // -- Import du groupe vocal --
+  if (interaction.isButton() && interaction.customId === 'import_vocal') {
+    const s = sessions.get(userId);
+    if (!s || !s.vocalData) return;
+
+    // Inscription du createur d'abord (son role sera demande apres)
+    // On notifie chaque membre selon son cas
+    for (const m of s.vocalData.members) {
+      if (m.autoRole) {
+        // Role unique detecte : on pre-inscrit automatiquement
+        if (!s.preImport) s.preImport = [];
+        s.preImport.push({ id: m.id, role: m.autoRole, name: m.displayName });
+      } else if (m.hasCommunity && m.roleCount === 0) {
+        // Uniquement role communaute : rappel pour s'enregistrer
+        try {
+          const user = await interaction.guild.members.fetch(m.id);
+          await user.send({
+            content: `Salut ${m.displayName} ! Pour etre importe automatiquement dans les prochains groupes Mythic+, pense a te choisir un role (Tank, Heal ou DPS) sur le serveur via les reaction roles. En attendant, tu peux toujours t'inscrire manuellement dans l'annonce du groupe !`
+          }).catch(() => {});
+        } catch(e) {}
+      } else {
+        // Plusieurs roles : on lui demande lequel il joue
+        try {
+          const user = await interaction.guild.members.fetch(m.id);
+          const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`vocal_role_tank_${s.vocalData.channelId}_${userId}`).setLabel('Tank').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`vocal_role_heal_${s.vocalData.channelId}_${userId}`).setLabel('Heal').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`vocal_role_dps_${s.vocalData.channelId}_${userId}`).setLabel('DPS').setStyle(ButtonStyle.Danger),
+          );
+          await user.send({
+            content: `Salut ${m.displayName} ! Un groupe Mythic+ se forme, quel role tu joues ?`,
+            components: [row]
+          }).catch(() => {});
+        } catch(e) {}
+      }
+    }
+
+    sessions.set(userId, s);
+    const d = DUNGEONS.find(x => x.value === s.dungeon);
+    await interaction.update({
+      content: `Parfait ! Les membres de ton vocal ont ete notifies.\nMaintenant, quel role TU joues ?\n${d?.label} +${s.level}`,
       components: [hostRoleButtons()]
     });
     return;
   }
+
+  // -- Reponse role depuis MP (vocal import) --
+  if (interaction.isButton() && interaction.customId.startsWith('vocal_role_')) {
+    const parts = interaction.customId.split('_');
+    const role     = parts[2]; // tank, heal ou dps
+    const hostId   = parts[parts.length - 1];
+
+    // Trouver la session du createur
+    const s = sessions.get(hostId);
+    if (!s) {
+      await interaction.reply({ content: 'Le groupe n\'est plus disponible.', ephemeral: true });
+      return;
+    }
+    if (!s.preImport) s.preImport = [];
+    const alreadyIn = s.preImport.find(p => p.id === interaction.user.id);
+    if (!alreadyIn) {
+      s.preImport.push({ id: interaction.user.id, role, name: interaction.user.username });
+      sessions.set(hostId, s);
+    }
+    await interaction.reply({ content: `Inscrit en tant que **${role}** ! Tu seras ajoute au groupe des qu'il sera publie.`, ephemeral: true });
+    return;
+  }
+
 
   // -- Role createur -> publication --
   if (interaction.isButton() && ['host_tank','host_heal','host_dps','host_none'].includes(interaction.customId)) {
