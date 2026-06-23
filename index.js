@@ -54,8 +54,9 @@ function getRolesNeeded(hostRole) {
 }
 
 // Nombre de DPS recherches selon le role du createur
+// Un groupe M+ a toujours 3 slots DPS au total
 function getDpsNeeded(hostRole) {
-  return hostRole === 'dps' ? 2 : 3;
+  return 3; // toujours 3 DPS dans un groupe, peu importe le role du createur
 }
 
 const sessions     = new Map(); // userId -> session en cours
